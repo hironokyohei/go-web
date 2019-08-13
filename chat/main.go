@@ -9,6 +9,11 @@ import (
 	"sync"
 	"text/template"
 	"trace"
+
+	"github.com/stretchr/objx"
+
+	"github.com/stretchr/gomniauth"
+	"github.com/stretchr/gomniauth/providers/google"
 )
 
 type templateHandler struct {
@@ -24,24 +29,42 @@ func (t *templateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			template.Must(template.ParseFiles(filepath.Join("templates",
 				t.filename)))
 	})
-	t.templ.Execute(w, r)
+	data := map[string]interface{}{
+		"Host": r.Host,
+	}
+	if authCookie, err := r.Cookie("auth"); err == nil {
+		data["UserData"] = objx.MustFromBase64(authCookie.Value)
+	}
+	t.templ.Execute(w, data)
 }
 
 func main() {
 	var addr = flag.String("addr", ":8080", "アプリケーションのアドレス")
 	flag.Parse() // フラグを解釈します
 
+	// Gomniauthのセットアップ
+	gomniauth.SetSecurityKey("セキュリティキー")
+	gomniauth.WithProviders(
+		google.New(
+			"733348667043-rqrkaq6j5q9ho3erb6oml9r60rha8q5b.apps.googleusercontent.com",
+			"h7ThvQcFVMHxW2V_F_7Ike3q",
+			"http://localhost:8080/auth/callback/google",
+		),
+	)
+
 	r := newRoom()
 	r.tracer = trace.New(os.Stdout)
 
-	http.Handle("/", &templateHandler{filename: "chat.html"})
+	http.Handle("/chat", MustAuth(&templateHandler{filename: "chat.html"}))
+	http.Handle("/login", &templateHandler{filename: "login.html"})
+	http.HandleFunc("/auth/", loginHandler)
 	http.Handle("/room", r)
 
 	// チャットルームを開始します。
 	go r.run()
 
 	// webサーバを開始します
-	log.Println("Webサーバーを開始します。ポート: ", *addr)
+	log.Println("Webサーバーを開始します。ポート:", *addr)
 	if err := http.ListenAndServe(*addr, nil); err != nil {
 		log.Fatal("ListenAndServe:", err)
 	}
